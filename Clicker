@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>Telegram WebApp — Clicker</title>
+<link rel="icon" href="data:;base64,iVBORw0KGgo=">
+<style>
+  :root{--bg:#0f1720;--card:#111827;--accent:#10b981;--muted:#9ca3af;--glass:rgba(255,255,255,0.03)}
+  html,body{height:100%;margin:0;background:linear-gradient(180deg,#071025 0%,var(--bg) 60%);font-family:Inter, Roboto, Arial, sans-serif;color:#fff}
+  .wrap{min-height:100%;display:flex;align-items:center;justify-content:center;padding:28px}
+  .card{width:100%;max-width:520px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:14px;padding:24px;box-shadow:0 6px 30px rgba(2,6,23,0.6);backdrop-filter:blur(6px)}
+  h1{margin:0 0 8px;font-size:20px}
+  .subtitle{color:var(--muted);margin:0 0 18px;font-size:13px}
+  .profile{display:flex;gap:12px;align-items:center;margin-bottom:18px}
+  .avatar{width:48px;height:48px;border-radius:10px;background:var(--glass);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:20px;color:var(--muted)}
+  .user{line-height:1}
+  .user .name{font-weight:600}
+  .user .id{font-size:12px;color:var(--muted)}
+  .click-area{display:flex;flex-direction:column;align-items:center;gap:14px;padding:18px 6px}
+  #btnClick{width:220px;height:86px;border-radius:16px;border:0;font-size:28px;font-weight:700;background:linear-gradient(180deg,var(--accent),#059669);color:#021018;cursor:pointer;box-shadow:0 6px 18px rgba(16,185,129,0.18);transition:transform .08s ease,box-shadow .08s ease}
+  #btnClick:active{transform:scale(.98)}
+  .scoreboard{display:flex;gap:12px;align-items:center;justify-content:center;margin-top:6px}
+  .chip{background:var(--glass);padding:8px 12px;border-radius:999px;font-weight:600;color:var(--muted)}
+  .big{font-size:28px;color:#fff}
+  .controls{display:flex;gap:8px;justify-content:center;margin-top:16px}
+  .btn{background:transparent;border:1px solid rgba(255,255,255,0.06);padding:8px 12px;border-radius:10px;color:var(--muted);cursor:pointer}
+  .hint{font-size:12px;color:var(--muted);text-align:center;margin-top:12px}
+  footer{font-size:12px;color:var(--muted);text-align:center;margin-top:10px}
+  @media(max-width:420px){#btnClick{width:180px;height:72px;font-size:22px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card" role="main" aria-live="polite">
+    <h1>Clicker — мини-игра</h1>
+    <p class="subtitle">Нажимай кнопку. Прогресс сохраняется автоматически.</p>
+
+    <div class="profile">
+      <div class="avatar" id="avatar">?</div>
+      <div class="user">
+        <div class="name" id="username">Гость</div>
+        <div class="id" id="userid">Не в Telegram</div>
+      </div>
+    </div>
+
+    <div class="click-area">
+      <button id="btnClick" aria-label="Нажимай">Клик!</button>
+
+      <div class="scoreboard" aria-hidden="false">
+        <div class="chip">Очки</div>
+        <div class="big" id="score">0</div>
+        <div class="chip">Рекорд</div>
+        <div class="chip" id="best">0</div>
+      </div>
+
+      <div class="controls">
+        <button class="btn" id="reset">Сбросить</button>
+        <button class="btn" id="send">Отправить на сервер</button>
+      </div>
+
+      <div class="hint" id="hint">Открыто не в Telegram — некоторые функции будут недоступны.</div>
+      <footer>Версия прототипа • Для продакшена валидируй initData на сервере</footer>
+    </div>
+  </div>
+</div>
+
+<script>
+/*
+  Прототип WebApp-кликера для Telegram.
+  Что делает:
+  - Поддержка Telegram.WebApp (если доступно): отображение имени, id, попытка вызвать tg.expand()
+  - Мгновенный отклик на клик + простая анимация
+  - Сохранение в localStorage и попытка POST /api/save-score
+  - Ключи localStorage: clicker_score_<userId|anon>, clicker_best_<...>
+  - ВАЖНО: НЕЛЬЗЯ доверять initData на клиенте. Проверяй подпись initData на сервере.
+*/
+
+const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+const btn = document.getElementById('btnClick');
+const scoreEl = document.getElementById('score');
+const bestEl = document.getElementById('best');
+const resetBtn = document.getElementById('reset');
+const sendBtn = document.getElementById('send');
+const hint = document.getElementById('hint');
+const avatar = document.getElementById('avatar');
+const username = document.getElementById('username');
+const userid = document.getElementById('userid');
+
+let user = { id: 'anon', first_name: 'Гость' };
+if (tg) {
+  try {
+    // initDataUnsafe безопасно читать только для UI; server must validate initData!
+    const ud = tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user : null;
+    if (ud) {
+      user.id = ud.id;
+      user.first_name = ud.first_name || ud.username || 'Игрок';
+      // avatar: take first letter if no photo
+      avatar.textContent = user.first_name.slice(0,1).toUpperCase();
+      username.textContent = (ud.first_name ? ud.first_name : 'Игрок') + (ud.username ? ' (@' + ud.username + ')' : '');
+      userid.textContent = 'id: ' + ud.id;
+    } else {
+      // Try to read from initData (but don't trust it)
+      avatar.textContent = '?';
+      username.textContent = 'Telegram пользователь';
+      userid.textContent = 'id: неизвестен';
+    }
+    hint.textContent = 'Открыто внутри Telegram — initData доступно. Сервер должен валидировать подпись.';
+    try { tg.expand(); } catch(e) {}
+  } catch(e) {
+    console.warn('tg init error', e);
+  }
+} else {
+  // Non-Telegram environment
+  hint.textContent = 'Открыто вне Telegram — для теста работает, но внутри Telegram будет доступно больше данных.';
+}
+
+// Keys for localStorage
+const KEY_SCORE = `clicker_score_${user.id}`;
+const KEY_BEST = `clicker_best_${user.id}`;
+
+// Load saved
+let score = parseInt(localStorage.getItem(KEY_SCORE) || '0', 10);
+let best = parseInt(localStorage.getItem(KEY_BEST) || '0', 10);
+scoreEl.textContent = score;
+bestEl.textContent = best;
+
+// click logic
+btn.addEventListener('click', () => {
+  // micro animation
+  btn.animate([{ transform: 'scale(1)' }, { transform: 'scale(0.98)' }, { transform: 'scale(1)' }], { duration: 110, easing: 'ease-out' });
+
+  score += 1;
+  scoreEl.textContent = score;
+  if (score > best) {
+    best = score;
+    bestEl.textContent = best;
+  }
+  // save locally immediately
+  localStorage.setItem(KEY_SCORE, String(score));
+  localStorage.setItem(KEY_BEST, String(best));
+});
+
+// reset
+resetBtn.addEventListener('click', () => {
+  if (!confirm('Сбросить очки?')) return;
+  score = 0;
+  best = 0;
+  scoreEl.textContent = '0';
+  bestEl.textContent = '0';
+  localStorage.removeItem(KEY_SCORE);
+  localStorage.removeItem(KEY_BEST);
+});
+
+// send to server (optional)
+async function sendScoreToServer() {
+  const payload = {
+    userId: user.id,
+    score,
+    best,
+    // НЕ отправляй initData со стороны клиента в продакшене — лучше сервер сам проверит initData подпись.
+    timestamp: Date.now()
+  };
+  try {
+    const r = await fetch('/api/save-score', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    if (!r.ok) throw new Error('status ' + r.status);
+    const j = await r.json();
+    alert('Отправлено. Сервер: ' + (j.message || 'ok'));
+  } catch (e) {
+    console.warn('send error', e);
+    alert('Не удалось отправить на сервер. Проверь /api/save-score или используй локальное сохранение.');
+  }
+}
+
+sendBtn.addEventListener('click', sendScoreToServer);
+
+// auto-send occasionally (throttled)
+let lastAutoSave = 0;
+function autoSave() {
+  const now = Date.now();
+  if (now - lastAutoSave > 30_000) { // не чаще чем раз в 30 секунд
+    lastAutoSave = now;
+    // не ждём ошибок — fire & forget
+    fetch('/api/save-score', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ userId:user.id, score, best, timestamp: now })
+    }).catch(()=>{/*silent*/});
+  }
+}
+setInterval(autoSave, 30_000);
+
+// Экспорт для devtools (удобно тестировать)
+window.__clicker = { getScore: ()=>score, getBest: ()=>best, sendScoreToServer };
+
+</script>
+</body>
+</html>
